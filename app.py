@@ -102,58 +102,82 @@ except KeyError:
 
 if groq_api_key and google_api_key:
     os.environ["GOOGLE_API_KEY"] = google_api_key
-    llm = ChatGroq(groq_api_key=groq_api_key, model_name="gemma2-9b-it")
+    
+    try:
+        llm = ChatGroq(groq_api_key=groq_api_key, model_name="gemma2-9b-it")
 
-    with st.spinner("🔍 Processing... Please wait."):
+        with st.spinner("🔍 Processing... Please wait."):
 
-        if "vectors" not in st.session_state:
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+            if "vectors" not in st.session_state:
+                try:
+                    # Initialize embeddings with proper configuration
+                    embeddings = GoogleGenerativeAIEmbeddings(
+                        model="models/embedding-001",
+                        google_api_key=google_api_key
+                    )
 
-            loader = PyPDFLoader(handbook_path)
-            raw_docs = loader.load()
+                    # Load and split documents
+                    loader = PyPDFLoader(handbook_path)
+                    raw_docs = loader.load()
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            documents = text_splitter.split_documents(raw_docs)
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=1000, 
+                        chunk_overlap=200
+                    )
+                    documents = text_splitter.split_documents(raw_docs)
 
-            st.session_state.vectors = FAISS.from_documents(documents, embeddings)
+                    # Create vector store with error handling
+                    st.session_state.vectors = FAISS.from_documents(documents, embeddings)
+                    st.success("✅ Document processed successfully!")
+                    
+                except Exception as e:
+                    st.error(f"Error processing documents: {str(e)}")
+                    st.error("Please check your Google API key and ensure the Generative AI API is enabled.")
+                    st.stop()
 
-        prompt = ChatPromptTemplate.from_template("""
-        Answer the questions based on the provided context only.
-        Please provide the most accurate response.
-        <context>
-        {context}
-        <context>
-        Question: {input}
-        """)
+            prompt = ChatPromptTemplate.from_template("""
+            Answer the questions based on the provided context only.
+            Please provide the most accurate response.
+            <context>
+            {context}
+            <context>
+            Question: {input}
+            """)
 
-        document_chain = create_stuff_documents_chain(llm, prompt)
-        retriever = st.session_state.vectors.as_retriever()
-        retrieval_chain = create_retrieval_chain(retriever, document_chain)
+            document_chain = create_stuff_documents_chain(llm, prompt)
+            retriever = st.session_state.vectors.as_retriever()
+            retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
 
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
 
-        if user_input := st.chat_input("Ask me..."):
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            with st.chat_message("user"):
-                st.markdown(user_input)
+            if user_input := st.chat_input("Ask me..."):
+                st.session_state.messages.append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
 
-            with st.chat_message("assistant"):
-                result = retrieval_chain.invoke({"input": user_input})
-                answer = result["answer"]
-                st.markdown(answer)
+                with st.chat_message("assistant"):
+                    try:
+                        result = retrieval_chain.invoke({"input": user_input})
+                        answer = result["answer"]
+                        st.markdown(answer)
 
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+                        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-                with st.expander("📎 Source Context"):
-                    for i, doc in enumerate(result["context"]):
-                        st.markdown(f"**Page {i+1}**")
-                        st.write(doc.page_content)
-                        st.markdown("---")
+                        with st.expander("📎 Source Context"):
+                            for i, doc in enumerate(result["context"]):
+                                st.markdown(f"**Page {i+1}**")
+                                st.write(doc.page_content)
+                                st.markdown("---")
+                    except Exception as e:
+                        st.error(f"Error generating response: {str(e)}")
+                        
+    except Exception as e:
+        st.error(f"Error initializing chatbot: {str(e)}")
+        st.stop()
 else:
     st.warning("Please enter your API keys in the sidebar to begin.")
-
