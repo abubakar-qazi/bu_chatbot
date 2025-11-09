@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import tempfile
 from langchain_groq import ChatGroq
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -8,7 +7,7 @@ from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # --------------------------- App Configuration ---------------------------
 st.set_page_config(
@@ -76,7 +75,10 @@ st.markdown("""
 
 # --------------------------- Sidebar ---------------------------
 with st.sidebar:
-    st.image("img/download.png", width=200)
+    try:
+        st.image("img/download.png", width=200)
+    except:
+        pass
     st.markdown("## 🎓 BU Chatbot")
     st.write(
         "An intelligent assistant to help you explore **Bahria University Handbook** policies & rules instantly."
@@ -95,25 +97,23 @@ handbook_path = "data/handbook.pdf"
 # Access secrets from Streamlit's secrets management
 try:
     groq_api_key = st.secrets["GROQ_API_KEY"]
-    google_api_key = st.secrets["GOOGLE_API_KEY"]
 except KeyError:
-    st.error("API keys not found. Please ensure GROQ_API_KEY and GOOGLE_API_KEY are set in your Streamlit secrets.")
+    st.error("API key not found. Please ensure GROQ_API_KEY is set in your Streamlit secrets.")
     st.stop()
 
-if groq_api_key and google_api_key:
-    os.environ["GOOGLE_API_KEY"] = google_api_key
-    
+if groq_api_key:
     try:
         llm = ChatGroq(groq_api_key=groq_api_key, model_name="gemma2-9b-it")
 
-        with st.spinner("🔍 Processing... Please wait."):
-
-            if "vectors" not in st.session_state:
+        # Process documents only once
+        if "vectors" not in st.session_state:
+            with st.spinner("🔍 Loading and processing handbook... This may take a minute on first run."):
                 try:
-                    # Initialize embeddings with proper configuration
-                    embeddings = GoogleGenerativeAIEmbeddings(
-                        model="models/embedding-001",
-                        google_api_key=google_api_key
+                    # Use HuggingFace embeddings (works locally, no API needed)
+                    embeddings = HuggingFaceEmbeddings(
+                        model_name="all-MiniLM-L6-v2",
+                        model_kwargs={'device': 'cpu'},
+                        encode_kwargs={'normalize_embeddings': True}
                     )
 
                     # Load and split documents
@@ -126,41 +126,56 @@ if groq_api_key and google_api_key:
                     )
                     documents = text_splitter.split_documents(raw_docs)
 
-                    # Create vector store with error handling
+                    # Create vector store
                     st.session_state.vectors = FAISS.from_documents(documents, embeddings)
-                    st.success("✅ Document processed successfully!")
+                    st.success("✅ Handbook loaded successfully!")
                     
+                except FileNotFoundError:
+                    st.error(f"❌ Handbook file not found at: {handbook_path}")
+                    st.info("Please ensure the handbook.pdf file is in the 'data' folder.")
+                    st.stop()
                 except Exception as e:
-                    st.error(f"Error processing documents: {str(e)}")
-                    st.error("Please check your Google API key and ensure the Generative AI API is enabled.")
+                    st.error(f"❌ Error processing documents: {str(e)}")
+                    st.info("Please check if the PDF file is valid and not corrupted.")
                     st.stop()
 
-            prompt = ChatPromptTemplate.from_template("""
-            Answer the questions based on the provided context only.
-            Please provide the most accurate response.
-            <context>
-            {context}
-            <context>
-            Question: {input}
-            """)
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_template("""
+        Answer the questions based on the provided context only.
+        Please provide the most accurate response based on the Bahria University Handbook.
+        If the answer is not in the context, say "I don't have information about that in the handbook."
+        
+        <context>
+        {context}
+        </context>
+        
+        Question: {input}
+        """)
 
-            document_chain = create_stuff_documents_chain(llm, prompt)
-            retriever = st.session_state.vectors.as_retriever()
-            retrieval_chain = create_retrieval_chain(retriever, document_chain)
+        # Create chains
+        document_chain = create_stuff_documents_chain(llm, prompt)
+        retriever = st.session_state.vectors.as_retriever(search_kwargs={"k": 3})
+        retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
+        # Initialize chat history
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+        # Display chat history
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-            if user_input := st.chat_input("Ask me..."):
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                with st.chat_message("user"):
-                    st.markdown(user_input)
+        # Chat input
+        if user_input := st.chat_input("Ask me about BU policies..."):
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
 
-                with st.chat_message("assistant"):
+            # Generate and display assistant response
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
                     try:
                         result = retrieval_chain.invoke({"input": user_input})
                         answer = result["answer"]
@@ -168,16 +183,19 @@ if groq_api_key and google_api_key:
 
                         st.session_state.messages.append({"role": "assistant", "content": answer})
 
-                        with st.expander("📎 Source Context"):
+                        # Show source context
+                        with st.expander("📎 View Source Context"):
                             for i, doc in enumerate(result["context"]):
-                                st.markdown(f"**Page {i+1}**")
+                                st.markdown(f"**Source {i+1}**")
                                 st.write(doc.page_content)
                                 st.markdown("---")
                     except Exception as e:
-                        st.error(f"Error generating response: {str(e)}")
+                        error_msg = f"Sorry, I encountered an error: {str(e)}"
+                        st.error(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
                         
     except Exception as e:
-        st.error(f"Error initializing chatbot: {str(e)}")
+        st.error(f"❌ Error initializing chatbot: {str(e)}")
         st.stop()
 else:
-    st.warning("Please enter your API keys in the sidebar to begin.")
+    st.warning("⚠️ Please configure your GROQ_API_KEY in Streamlit secrets to begin.")
