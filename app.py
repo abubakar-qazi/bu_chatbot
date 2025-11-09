@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import tempfile
 from langchain_groq import ChatGroq
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
@@ -82,10 +82,6 @@ with st.sidebar:
         "An intelligent assistant to help you explore **Bahria University Handbook** policies & rules instantly."
     )
 
-    st.markdown("### 🔧 Settings")
-    groq_api_key = st.text_input("🔑 Enter Groq API Key", type="password")
-    google_api_key = st.text_input("🔑 Enter Google API Key", type="password")
-
     st.markdown("---")
     st.info("🚀 Tip: Ask anything about attendance policy, grading, scholarships, etc.")
 
@@ -95,6 +91,14 @@ st.subheader("Your AI Assistant for Bahria University Rules & Policies")
 
 # Load document from static folder
 handbook_path = "data/handbook.pdf"
+
+# Access secrets from Streamlit's secrets management
+try:
+    groq_api_key = st.secrets["GROQ_API_KEY"]
+    google_api_key = st.secrets["GOOGLE_API_KEY"]
+except KeyError:
+    st.error("API keys not found. Please ensure GROQ_API_KEY and GOOGLE_API_KEY are set in your Streamlit secrets.")
+    st.stop()
 
 if groq_api_key and google_api_key:
     os.environ["GOOGLE_API_KEY"] = google_api_key
