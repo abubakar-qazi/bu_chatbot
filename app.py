@@ -7,8 +7,7 @@ from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-import time
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # --------------------------- App Configuration ---------------------------
 st.set_page_config(
@@ -98,74 +97,38 @@ handbook_path = "data/handbook.pdf"
 # Access secrets from Streamlit's secrets management
 try:
     groq_api_key = st.secrets["GROQ_API_KEY"]
-    google_api_key = st.secrets["GOOGLE_API_KEY"]
 except KeyError:
-    st.error("API keys not found. Please ensure GROQ_API_KEY and GOOGLE_API_KEY are set in your Streamlit secrets.")
+    st.error("API key not found. Please ensure GROQ_API_KEY is set in your Streamlit secrets.")
     st.stop()
 
-if groq_api_key and google_api_key:
+if groq_api_key:
     try:
-        os.environ["GOOGLE_API_KEY"] = google_api_key
         llm = ChatGroq(groq_api_key=groq_api_key, model_name="gemma2-9b-it")
 
         # Process documents only once
         if "vectors" not in st.session_state:
-            with st.spinner("🔍 Loading and processing handbook... Please wait, this may take 1-2 minutes."):
+            with st.spinner("🔍 Loading and processing handbook... This may take a minute on first run."):
                 try:
-                    # Load and split documents FIRST (before embeddings)
+                    # Use HuggingFace embeddings (works locally, no API needed)
+                    embeddings = HuggingFaceEmbeddings(
+                        model_name="all-MiniLM-L6-v2",
+                        model_kwargs={'device': 'cpu'},
+                        encode_kwargs={'normalize_embeddings': True}
+                    )
+
+                    # Load and split documents
                     loader = PyPDFLoader(handbook_path)
                     raw_docs = loader.load()
 
                     text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=500,  # Smaller chunks for faster processing
-                        chunk_overlap=50
+                        chunk_size=1000, 
+                        chunk_overlap=200
                     )
                     documents = text_splitter.split_documents(raw_docs)
-                    
-                    st.info(f"📄 Processing {len(documents)} document chunks...")
 
-                    # Process in batches to avoid timeout
-                    embeddings = GoogleGenerativeAIEmbeddings(
-                        model="models/embedding-001",
-                        google_api_key=google_api_key
-                    )
-                    
-                    # Process in smaller batches
-                    batch_size = 10
-                    all_vectors = []
-                    
-                    progress_bar = st.progress(0)
-                    for i in range(0, len(documents), batch_size):
-                        batch = documents[i:i + batch_size]
-                        try:
-                            if i == 0:
-                                # Create initial vector store
-                                st.session_state.vectors = FAISS.from_documents(batch, embeddings)
-                            else:
-                                # Add to existing vector store
-                                batch_vectors = FAISS.from_documents(batch, embeddings)
-                                st.session_state.vectors.merge_from(batch_vectors)
-                            
-                            # Update progress
-                            progress = min((i + batch_size) / len(documents), 1.0)
-                            progress_bar.progress(progress)
-                            
-                            # Small delay to avoid rate limits
-                            time.sleep(0.5)
-                        except Exception as e:
-                            st.warning(f"⚠️ Batch {i//batch_size + 1} had an issue, retrying...")
-                            time.sleep(2)
-                            # Retry once
-                            if i == 0:
-                                st.session_state.vectors = FAISS.from_documents(batch, embeddings)
-                            else:
-                                batch_vectors = FAISS.from_documents(batch, embeddings)
-                                st.session_state.vectors.merge_from(batch_vectors)
-                    
-                    progress_bar.progress(1.0)
+                    # Create vector store
+                    st.session_state.vectors = FAISS.from_documents(documents, embeddings)
                     st.success("✅ Handbook loaded successfully!")
-                    time.sleep(1)
-                    st.rerun()
                     
                 except FileNotFoundError:
                     st.error(f"❌ Handbook file not found at: {handbook_path}")
@@ -173,9 +136,7 @@ if groq_api_key and google_api_key:
                     st.stop()
                 except Exception as e:
                     st.error(f"❌ Error processing documents: {str(e)}")
-                    st.info("This might be due to API rate limits. Please try again in a moment.")
-                    if st.button("🔄 Retry"):
-                        st.rerun()
+                    st.info("Please check if the PDF file is valid and not corrupted.")
                     st.stop()
 
         # Create prompt template
@@ -237,4 +198,4 @@ if groq_api_key and google_api_key:
         st.error(f"❌ Error initializing chatbot: {str(e)}")
         st.stop()
 else:
-    st.warning("⚠️ Please configure your API keys in Streamlit secrets to begin.")
+    st.warning("⚠️ Please configure your GROQ_API_KEY in Streamlit secrets to begin.")
