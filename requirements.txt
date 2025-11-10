@@ -5,6 +5,8 @@ langchain-core>=0.2.0
 langchain-community>=0.2.0
 langchain-groq>=0.1.5
 langchain-text-splitters>=0.2.0
+# Free/Local Embeddings Dependencies
 sentence-transformers
+langchain-huggingface
 faiss-cpu
 pypdf
