@@ -105,39 +105,62 @@ if groq_api_key:
     try:
         llm = ChatGroq(groq_api_key=groq_api_key, model_name="gemma2-9b-it")
 
-        # Process documents only once
+        # Path for the pre-computed FAISS index
+        FAISS_INDEX_PATH = "faiss_index"
+
+        # Process documents only once and cache them
         if "vectors" not in st.session_state:
-            with st.spinner("🔍 Loading and processing handbook... This may take a minute on first run."):
-                try:
-                    # Use HuggingFace embeddings (works locally, no API needed)
-                    embeddings = HuggingFaceEmbeddings(
-                        model_name="all-MiniLM-L6-v2",
-                        model_kwargs={'device': 'cpu'},
-                        encode_kwargs={'normalize_embeddings': True}
-                    )
+            # Use HuggingFace embeddings (works locally, no API needed)
+            embeddings = HuggingFaceEmbeddings(
+                model_name="all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
 
-                    # Load and split documents
-                    loader = PyPDFLoader(handbook_path)
-                    raw_docs = loader.load()
+            if os.path.exists(FAISS_INDEX_PATH):
+                # Load from cache
+                with st.spinner("🔍 Loading handbook from cache..."):
+                    try:
+                        st.session_state.vectors = FAISS.load_local(
+                            FAISS_INDEX_PATH, 
+                            embeddings,
+                            allow_dangerous_deserialization=True  # Add this line
+                        )
+                        st.success("✅ Handbook loaded from cache!")
+                    except Exception as e:
+                        st.error(f"❌ Error loading cached index: {str(e)}")
+                        st.info("Will try to re-process the document.")
+                        # Fallback to reprocessing if loading fails
+                        os.remove(FAISS_INDEX_PATH) # Remove corrupted index
+                        st.rerun()
 
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=1000, 
-                        chunk_overlap=200
-                    )
-                    documents = text_splitter.split_documents(raw_docs)
+            else:
+                # Process and create cache
+                with st.spinner("🔍 Loading and processing handbook for the first time... This may take a minute."):
+                    try:
+                        # Load and split documents
+                        loader = PyPDFLoader(handbook_path)
+                        raw_docs = loader.load()
 
-                    # Create vector store
-                    st.session_state.vectors = FAISS.from_documents(documents, embeddings)
-                    st.success("✅ Handbook loaded successfully!")
-                    
-                except FileNotFoundError:
-                    st.error(f"❌ Handbook file not found at: {handbook_path}")
-                    st.info("Please ensure the handbook.pdf file is in the 'data' folder.")
-                    st.stop()
-                except Exception as e:
-                    st.error(f"❌ Error processing documents: {str(e)}")
-                    st.info("Please check if the PDF file is valid and not corrupted.")
-                    st.stop()
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=1000, 
+                            chunk_overlap=200
+                        )
+                        documents = text_splitter.split_documents(raw_docs)
+
+                        # Create and save vector store
+                        st.session_state.vectors = FAISS.from_documents(documents, embeddings)
+                        st.session_state.vectors.save_local(FAISS_INDEX_PATH)
+                        st.success("✅ Handbook processed and cached successfully!")
+                        
+                    except FileNotFoundError:
+                        st.error(f"❌ Handbook file not found at: {handbook_path}")
+                        st.info("Please ensure the handbook.pdf file is in the 'data' folder.")
+                        st.stop()
+                    except Exception as e:
+                        st.error(f"❌ Error processing documents: {str(e)}")
+                        st.info("Please check if the PDF file is valid and not corrupted.")
+                        st.stop()
 
         # Create prompt template
         prompt = ChatPromptTemplate.from_template("""
