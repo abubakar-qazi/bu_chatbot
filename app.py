@@ -103,7 +103,7 @@ except KeyError:
 
 if groq_api_key:
     try:
-        llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama3-8b-8192")
+        llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
 
         # Path for the pre-computed FAISS index
         FAISS_INDEX_PATH = "faiss_index"
